@@ -57,7 +57,6 @@ def get_bracket_summary(data_df, cols, subjects, threshold):
     for sub in subjects:
         sub_vals = pd.to_numeric(data_df[data_df[cols['subject']] == sub][cols['attendance']], errors='coerce').dropna()
         
-        # Dynamic Brackets based on user threshold
         b1 = len(sub_vals[(sub_vals >= 0) & (sub_vals < 50)])
         b2 = len(sub_vals[(sub_vals >= 50) & (sub_vals < 60)])
         b3 = len(sub_vals[(sub_vals >= 60) & (sub_vals < 70)])
@@ -66,7 +65,6 @@ def get_bracket_summary(data_df, cols, subjects, threshold):
         row = {"Subject": sub}
         total = 0
         
-        # Only add brackets if they are within the threshold
         if threshold > 0:
             row["0.00-49.99"] = b1
             total += b1
@@ -178,8 +176,17 @@ if uploaded_file:
     
     with st.sidebar:
         st.markdown("### 🛠️ Global Parameters")
-        # Change 1: Threshold Slider adjusted to 0.00 - 100.00 with 0.01 step
-        threshold = st.slider("Shortage Threshold (%)", 0.00, 100.00, 75.00, 0.01)
+        
+        # CHANGED: Replaced slider with Number Input for manual entry and +/- buttons
+        threshold = st.number_input(
+            "Shortage Threshold (%)", 
+            min_value=0.00, 
+            max_value=100.00, 
+            value=75.00, 
+            step=0.01,
+            format="%.2f"
+        )
+        
         dept_choice = st.selectbox("Select Department", ["All Departments"] + sorted(df['Dept'].unique()))
         
         st.divider()
@@ -233,18 +240,15 @@ if uploaded_file:
                     
                     s_subs = sorted([s for s in s_df[c_map['subject']].unique() if is_valid_subject(s)])
                     
-                    # 1. GENERATE SHORTAGE REPORT (GEN)
                     gen_grid, _ = process_grid(s_df, c_map, s_subs, threshold, show_all=False)
                     if gen_grid is not None:
                         with st.expander(f"👁️ {series} SHORTAGE SUMMARY"):
                             st.dataframe(gen_grid, hide_index=True, use_container_width=True)
                         sn = f"{series} GEN"[:31]
                         gen_grid.to_excel(writer, sheet_name=sn, index=False)
-                        # Change 2: Summary at bottom respects the threshold
                         get_bracket_summary(s_df, c_map, s_subs, threshold).to_excel(writer, sheet_name=sn, startrow=len(gen_grid)+2, index=False)
                         apply_styles(writer.sheets[sn], threshold)
 
-                    # 2. GENERATE FULL REPORT (ALL) - No filtering on attendance, but summary still respects threshold
                     all_grid, _ = process_grid(s_df, c_map, s_subs, threshold, show_all=True)
                     if all_grid is not None:
                         sn_all = f"{series} GEN ALL"[:31]
@@ -252,7 +256,6 @@ if uploaded_file:
                         get_bracket_summary(s_df, c_map, s_subs, threshold).to_excel(writer, sheet_name=sn_all, startrow=len(all_grid)+2, index=False)
                         apply_styles(writer.sheets[sn_all], threshold)
                     
-                    # Section-wise reports
                     sections = sorted(s_df[c_map['batch']].unique())
                     for sec in sections:
                         sec_df = s_df[s_df[c_map['batch']] == sec]
