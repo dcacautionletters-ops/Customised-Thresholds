@@ -52,23 +52,37 @@ def is_valid_subject(subject_name):
     s_upper = str(subject_name).upper()
     return not any(bad in s_upper for bad in KEYWORDS_TO_IGNORE)
 
-def get_bracket_summary(data_df, cols, subjects):
+def get_bracket_summary(data_df, cols, subjects, threshold):
     summary_data = []
     for sub in subjects:
         sub_vals = pd.to_numeric(data_df[data_df[cols['subject']] == sub][cols['attendance']], errors='coerce').dropna()
+        
+        # Dynamic Brackets based on user threshold
         b1 = len(sub_vals[(sub_vals >= 0) & (sub_vals < 50)])
         b2 = len(sub_vals[(sub_vals >= 50) & (sub_vals < 60)])
         b3 = len(sub_vals[(sub_vals >= 60) & (sub_vals < 70)])
         b4 = len(sub_vals[(sub_vals >= 70) & (sub_vals < 75)])
         
-        summary_data.append({
-            "Subject": sub,
-            "0.00-49.99": b1,
-            "50.00-59.99": b2,
-            "60.00-69.99": b3,
-            "70.00-74.99": b4,
-            "Total": b1 + b2 + b3 + b4
-        })
+        row = {"Subject": sub}
+        total = 0
+        
+        # Only add brackets if they are within the threshold
+        if threshold > 0:
+            row["0.00-49.99"] = b1
+            total += b1
+        if threshold > 50:
+            row["50.00-59.99"] = b2
+            total += b2
+        if threshold > 60:
+            row["60.00-69.99"] = b3
+            total += b3
+        if threshold > 70:
+            row["70.00-74.99"] = b4
+            total += b4
+            
+        row["Total"] = total
+        summary_data.append(row)
+        
     return pd.DataFrame(summary_data)
 
 def apply_styles(ws, threshold, is_summary=False):
@@ -164,7 +178,8 @@ if uploaded_file:
     
     with st.sidebar:
         st.markdown("### 🛠️ Global Parameters")
-        threshold = st.slider("Shortage Threshold (%)", 50, 95, 75, 5)
+        # Change 1: Threshold Slider adjusted to 0.00 - 100.00 with 0.01 step
+        threshold = st.slider("Shortage Threshold (%)", 0.00, 100.00, 75.00, 0.01)
         dept_choice = st.selectbox("Select Department", ["All Departments"] + sorted(df['Dept'].unique()))
         
         st.divider()
@@ -184,33 +199,28 @@ if uploaded_file:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        pd.DataFrame({"Report": [f"Filtered: {dept_choice}"]}).to_excel(writer, sheet_name="Audit", index=False)
+        pd.DataFrame({"Report": [f"Filtered: {dept_choice} at {threshold}%"]}).to_excel(writer, sheet_name="Audit", index=False)
         summaries, subject_impact = [], pd.Series(dtype=float)
         
         tabs = st.tabs(["📊 COMMAND CENTER"] + [f"💎 {d}" for d in active_depts])
 
         for d_idx, dept in enumerate(active_depts):
             d_df = df[df['Dept'] == dept]
-            
             unique_batches = d_df[c_map['batch']].astype(str).unique()
             series_list = set()
             for b in unique_batches:
                 b_upper = b.upper()
                 b_parts = b.split()
-                
-                # Logic for BCA (Grouping BCA, BCA AIML, BCA DS under BCA 2025/2024)
                 if "BCA" in b_upper:
                     year = next((p for p in b_parts if p.isdigit()), "Series")
                     series_list.add(f"BCA {year}")
-                # Logic for MCA (Grouping all MCA under MCA 2025/2024)
                 elif "MCA" in b_upper:
                     year = next((p for p in b_parts if p.isdigit()), "Series")
                     series_list.add(f"MCA {year}")
-                # Logic for MBA BU and MCOM FA (Grouping by the requested prefix + Year)
                 elif "MBA" in b_upper:
-                    series_list.add(' '.join(b_parts[:3])) # MBA BU 2025
+                    series_list.add(' '.join(b_parts[:3])) 
                 elif "MCOM" in b_upper:
-                    series_list.add(' '.join(b_parts[:3])) # MCOM FA 2025
+                    series_list.add(' '.join(b_parts[:3])) 
                 else:
                     series_list.add(' '.join(b_parts[:2]))
             
@@ -218,7 +228,6 @@ if uploaded_file:
             
             with tabs[d_idx+1]:
                 for series in series_list:
-                    # Filter data: use 'contains' to catch sub-streams in one sheet
                     s_df = d_df[d_df[c_map['batch']].astype(str).str.contains(series.split()[0]) & 
                                 d_df[c_map['batch']].astype(str).str.contains(series.split()[-1])]
                     
@@ -231,18 +240,19 @@ if uploaded_file:
                             st.dataframe(gen_grid, hide_index=True, use_container_width=True)
                         sn = f"{series} GEN"[:31]
                         gen_grid.to_excel(writer, sheet_name=sn, index=False)
-                        get_bracket_summary(s_df, c_map, s_subs).to_excel(writer, sheet_name=sn, startrow=len(gen_grid)+2, index=False)
+                        # Change 2: Summary at bottom respects the threshold
+                        get_bracket_summary(s_df, c_map, s_subs, threshold).to_excel(writer, sheet_name=sn, startrow=len(gen_grid)+2, index=False)
                         apply_styles(writer.sheets[sn], threshold)
 
-                    # 2. GENERATE FULL REPORT (ALL)
+                    # 2. GENERATE FULL REPORT (ALL) - No filtering on attendance, but summary still respects threshold
                     all_grid, _ = process_grid(s_df, c_map, s_subs, threshold, show_all=True)
                     if all_grid is not None:
                         sn_all = f"{series} GEN ALL"[:31]
                         all_grid.to_excel(writer, sheet_name=sn_all, index=False)
-                        get_bracket_summary(s_df, c_map, s_subs).to_excel(writer, sheet_name=sn_all, startrow=len(all_grid)+2, index=False)
+                        get_bracket_summary(s_df, c_map, s_subs, threshold).to_excel(writer, sheet_name=sn_all, startrow=len(all_grid)+2, index=False)
                         apply_styles(writer.sheets[sn_all], threshold)
                     
-                    # Section-wise reports remain as they are
+                    # Section-wise reports
                     sections = sorted(s_df[c_map['batch']].unique())
                     for sec in sections:
                         sec_df = s_df[s_df[c_map['batch']] == sec]
@@ -252,7 +262,7 @@ if uploaded_file:
                                 st.dataframe(grid, hide_index=True, use_container_width=True)
                             sn_sec = str(sec).replace("/", "-")[:31]
                             grid.to_excel(writer, sheet_name=sn_sec, index=False)
-                            get_bracket_summary(sec_df, c_map, s_subs).to_excel(writer, sheet_name=sn_sec, startrow=len(grid)+2, index=False)
+                            get_bracket_summary(sec_df, c_map, s_subs, threshold).to_excel(writer, sheet_name=sn_sec, startrow=len(grid)+2, index=False)
                             apply_styles(writer.sheets[sn_sec], threshold)
                             summaries.append({'Section': sec, 'Count': len(grid)-1})
                             subject_impact = subject_impact.add(counts, fill_value=0)
@@ -275,6 +285,6 @@ if uploaded_file:
                             st.plotly_chart(px.pie(impact_df.head(10), names='Subject', values='Students', hole=0.4, title="Top Subject Impact", template="plotly_dark"), use_container_width=True)
                 sum_df.to_excel(writer, sheet_name='SUMMARY', index=False)
             else:
-                st.success(f"No shortages found for {dept_choice}.")
+                st.success(f"No shortages found for {dept_choice} at {threshold}%.")
 
     st.download_button(f"📥 Download {dept_choice} Report", output.getvalue(), f"VMS_{dept_choice}_Report.xlsx", use_container_width=True)
